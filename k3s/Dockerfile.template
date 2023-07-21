@@ -1,0 +1,59 @@
+FROM balenalib/aarch64-ubuntu:focal-build-20230530 as kmods_build
+
+RUN install_packages \
+    curl build-essential libelf-dev libssl-dev pkg-config git flex bison bc python kmod \
+    apt-transport-https ca-certificates
+
+RUN update-ca-certificates
+
+# Get kernel source
+RUN curl https://coral.googlesource.com/linux-imx/+archive/refs/heads/4.14.98.tar.gz \
+    -o /usr/src/4.14.98.tar.gz \
+    && mkdir /usr/src/linux-imx-4.14.98 \
+    && tar -xf /usr/src/4.14.98.tar.gz -C /usr/src/linux-imx-4.14.98
+
+
+# Get balena kernel headers
+RUN curl https://files.balena-cloud.com/images/coral-dev/2.108.26/kernel_modules_headers.tar.gz \
+    -o /usr/src/kernel_modules_headers.tar.gz \
+    && mkdir /usr/src/headers-coral-dev-2.108.26/ \
+    && tar -xf /usr/src/kernel_modules_headers.tar.gz -C /usr/src/headers-coral-dev-2.108.26/
+
+
+# patch kernel config to enable modules, then build relevant modules
+WORKDIR /usr/src/headers-coral-dev-2.108.26/kernel_modules_headers
+COPY patch.config .
+RUN ./scripts/kconfig/merge_config.sh -m .config patch.config
+RUN make -j4 modules_prepare
+RUN make -j4 M=/usr/src/linux-imx-4.14.98/net/netfilter
+RUN make -j4 M=/usr/src/linux-imx-4.14.98/net/ipv4
+
+# Copy all build modules to output directory
+WORKDIR /usr/src/linux-imx-4.14.98
+RUN mkdir /kmods \
+    && find . -type f -name "*.ko" -exec cp --parent {} /kmods \;
+
+
+# download and install k3s and calicoctl
+FROM balenalib/aarch64-ubuntu:focal-build-20230530 as k3s_build
+ARG K3S_VERSION=v1.22.5%2Bk3s1
+
+COPY install-k3s.sh /docker/install-k3s.sh
+RUN /docker/install-k3s.sh %%BALENA_ARCH%%
+
+
+FROM balenalib/aarch64-ubuntu:focal-build-20230530 as k3s_run
+
+# Copy binaries to runtime images
+COPY --from=k3s_build /usr/local/bin/k3s /usr/local/bin/k3s
+COPY --from=k3s_build /usr/local/bin/calicoctl /usr/local/bin/calicoctl
+
+# install needed deps to load kernel modules
+RUN install_packages kmod
+
+# Copy built kernel modules to final image
+COPY --from=kmods_build /kmods /kmods
+
+# startup script will load kmods and test config, finally starting k3s agent
+COPY start.sh /docker/start.sh
+CMD ["/docker/start.sh"]

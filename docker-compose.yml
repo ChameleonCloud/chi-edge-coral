@@ -1,0 +1,40 @@
+version: "2.1"
+
+services:
+  k3s:
+    build:
+      context: ./k3s
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 65535
+        hard: 65535
+    privileged: true
+    network_mode: host
+    tmpfs:
+      - /run/k3s
+      - /run/containerd
+      # For Calico
+      - /run/calico
+      - /run/nodeagent
+    restart: always
+    volumes:
+      - k3s_data_dir:/var/lib/rancher/k3s
+      - k3s_node_dir:/etc/rancher
+      # For Calico
+      - calico_data_dir:/var/lib/calico
+      - k3s_cni_net:/etc/cni/net.d
+      - k3s_cni_bin:/opt/cni/bin
+      - k3s_cni_log:/var/log/calico
+      - k3s_flexvol:/opt/libexec/kubernetes/kubelet-plugins/volume/exec
+    labels:
+      io.balena.features.kernel-modules: '1'
+volumes:
+  k3s_data_dir: {}
+  k3s_node_dir: {}
+  k3s_flexvol: {}
+  k3s_cni_net: {}
+  k3s_cni_bin: {}
+  k3s_cni_log: {}
+  calico_data_dir: {}
+  wireguard_etc: {}
